@@ -1,0 +1,43 @@
+# AI 教育平台 — Python 依赖
+
+# ─── Web Framework ─────────────────────────────────
+fastapi==0.115.0
+uvicorn[standard]==0.30.0
+pydantic==2.8.0
+pydantic-settings==2.4.0
+
+# ─── Database ──────────────────────────────────────
+sqlalchemy[asyncio]==2.0.31
+asyncpg==0.29.0
+alembic==1.13.0
+psycopg2-binary==2.9.9
+
+# ─── Redis / Cache ─────────────────────────────────
+redis==5.0.0
+celery==5.4.0
+
+# ─── Auth ───────────────────────────────────────────
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+python-multipart==0.0.12
+
+# ─── LLM / AI ───────────────────────────────────────
+httpx==0.27.0
+websockets==13.0
+
+# LangGraph
+langgraph==0.2.0
+langchain-core==0.3.0
+
+# LangChain + RAG
+langchain==0.3.0
+langchain-community==0.3.0
+langchain-qdrant==0.2.0
+qdrant-client==1.12.0
+sentence-transformers==3.0.0
+
+# ─── Utilities ──────────────────────────────────────
+python-dotenv==1.0.0
+loguru==0.7.2
+tenacity==9.0.0
+typing-extensions==4.12.0
