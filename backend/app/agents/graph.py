@@ -1,7 +1,9 @@
 """
 LangGraph Agent — Agent 图编排
 """
+
 from __future__ import annotations
+from typing import Optional
 
 from langgraph.graph import END, StateGraph
 from langgraph.checkpoint.memory import MemorySaver
@@ -76,7 +78,7 @@ def build_agent_graph() -> StateGraph:
 agent_graph = build_agent_graph()
 
 
-async def run_agent(user_input: str, user_id: str, thread_id: str | None = None) -> dict:
+async def run_agent(user_input: str, user_id: str, thread_id: Optional[str] = None) -> dict:
     """
     运行 Agent 并返回结果
 

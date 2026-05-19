@@ -1,7 +1,9 @@
 """
 RAG — 向量数据库 Qdrant
 """
+
 from __future__ import annotations
+from typing import Optional
 
 from typing import Any
 
@@ -22,7 +24,7 @@ def get_qdrant_client() -> QdrantClient:
 
 
 async def ensure_collection(
-    collection_name: str | None = None,
+    collection_name: Optional[str] = None,
     vector_size: int = 768,
 ):
     """确保集合存在（不存在则创建）"""
@@ -51,7 +53,7 @@ async def ensure_collection(
 
 async def insert_documents(
     documents: list[dict[str, Any]],
-    collection_name: str | None = None,
+    collection_name: Optional[str] = None,
 ):
     """
     插入文档到向量库
@@ -90,9 +92,9 @@ async def insert_documents(
 async def search_similar(
     query: str,
     top_k: int = 5,
-    collection_name: str | None = None,
+    collection_name: Optional[str] = None,
     score_threshold: float = 0.6,
-    filters: dict[str, Any] | None = None,
+    filters: Optional[dict[str, Any]] = None,
 ) -> list[dict[str, Any]]:
     """
     语义搜索
@@ -151,7 +153,7 @@ async def search_similar(
     ]
 
 
-async def delete_collection(collection_name: str | None = None):
+async def delete_collection(collection_name: Optional[str] = None):
     """删除集合"""
     client = get_qdrant_client()
     name = collection_name or settings.QDRANT_COLLECTION

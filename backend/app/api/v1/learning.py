@@ -1,6 +1,9 @@
 """
 API — 学习内容 & 路径路由
 """
+
+from __future__ import annotations
+from typing import Optional
 from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession

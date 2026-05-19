@@ -3,24 +3,27 @@
 """
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime, timedelta, timezone
 
+import bcrypt
 from jose import JWTError, jwt
-from passlib.context import CryptContext
 
 from app.config import settings
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+def _password_digest(password: str) -> bytes:
+    return hashlib.sha256(password.encode("utf-8")).hexdigest().encode("ascii")
 
 
 def hash_password(password: str) -> str:
     """对密码进行 bcrypt 哈希"""
-    return pwd_context.hash(password)
+    return bcrypt.hashpw(_password_digest(password), bcrypt.gensalt()).decode("utf-8")
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """校验密码"""
-    return pwd_context.verify(plain_password, hashed_password)
+    return bcrypt.checkpw(_password_digest(plain_password), hashed_password.encode("utf-8"))
 
 
 def create_access_token(sub: str, extra_claims: dict | None = None) -> str:

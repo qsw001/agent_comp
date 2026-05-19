@@ -1,14 +1,17 @@
 """
 Pydantic Schema — API 请求/响应模型
 """
+
 from __future__ import annotations
 
+import re
 from datetime import datetime
-from typing import Any, Generic, TypeVar
+from typing import Any, Generic, Optional, TypeVar
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 T = TypeVar("T")
+EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
 # ─── 通用 ────────────────────────────────────────────
@@ -16,15 +19,15 @@ T = TypeVar("T")
 class ApiResponse(BaseModel, Generic[T]):
     """统一 API 响应"""
     success: bool = True
-    data: T | None = None
-    error: ApiError | None = None
-    meta: PaginationMeta | None = None
+    data: Optional[T] = None
+    error: Optional[ApiError] = None
+    meta: Optional[PaginationMeta] = None
 
 
 class ApiError(BaseModel):
     code: str
     message: str
-    details: dict[str, list[str]] | None = None
+    details: Optional[dict[str, list[str]]] = None
 
 
 class PaginationMeta(BaseModel):
@@ -39,7 +42,18 @@ class PaginationParams(BaseModel):
     page_size: int = Field(default=20, ge=1, le=100)
 
 
+class MessageResponse(BaseModel):
+    message: str
+
+
 # ─── Auth ────────────────────────────────────────────
+
+def _normalize_email(value: str) -> str:
+    email = value.strip().lower()
+    if not EMAIL_PATTERN.fullmatch(email):
+        raise ValueError("邮箱格式不合法")
+    return email
+
 
 class LoginRequest(BaseModel):
     username: str
@@ -58,6 +72,25 @@ class UserCreate(BaseModel):
     password: str = Field(min_length=6, max_length=128)
 
 
+class EmailCodeSendRequest(BaseModel):
+    email: str = Field(min_length=5, max_length=255)
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, value: str) -> str:
+        return _normalize_email(value)
+
+
+class EmailCodeVerifyRequest(BaseModel):
+    email: str = Field(min_length=5, max_length=255)
+    code: str = Field(pattern=r"^\d{6}$")
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, value: str) -> str:
+        return _normalize_email(value)
+
+
 class UserResponse(BaseModel):
     id: str
     username: str
@@ -72,7 +105,7 @@ class DimensionData(BaseModel):
     name: str
     value: float = Field(ge=0, le=100)
     label: str
-    description: str | None = None
+    description: Optional[str] = None
 
 
 class ProfileCreate(BaseModel):
@@ -84,7 +117,7 @@ class ProfileResponse(BaseModel):
     id: str
     user_id: str
     name: str
-    summary: str | None
+    summary: Optional[str]
     dimensions: dict[str, Any]
     status: str
     created_at: datetime
@@ -115,7 +148,7 @@ class ChatMessageResponse(BaseModel):
     role: str
     content: str
     content_type: str
-    metadata: dict[str, Any] | None = None
+    metadata: Optional[dict[str, Any]] = None
     created_at: datetime
 
 
@@ -128,7 +161,7 @@ class LearningContentResponse(BaseModel):
     subject: str
     difficulty: int
     content: str
-    description: str | None
+    description: Optional[str]
     tags: list[str]
     created_at: datetime
 
@@ -146,7 +179,7 @@ class LearningPathResponse(BaseModel):
 class EvaluationSubmit(BaseModel):
     content_id: str
     score: float = Field(ge=0, le=100)
-    feedback: str | None = None
+    feedback: Optional[str] = None
 
 
 class EvaluationResponse(BaseModel):
@@ -154,7 +187,7 @@ class EvaluationResponse(BaseModel):
     profile_id: str
     content_id: str
     score: float
-    feedback: str | None
+    feedback: Optional[str]
     submitted_at: datetime
 
 

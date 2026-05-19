@@ -35,6 +35,7 @@ class ApiClient {
           // Token 过期，清除并跳转登录
           if (typeof window !== "undefined") {
             localStorage.removeItem("auth_token");
+            document.cookie = "auth_token=; path=/; max-age=0; SameSite=Lax";
             window.location.href = "/login";
           }
         }

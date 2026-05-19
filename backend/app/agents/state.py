@@ -1,9 +1,11 @@
 """
 LangGraph Agent — 状态定义
 """
-from __future__ import annotations
 
-from typing import Annotated, Any, Literal, Sequence, TypedDict
+from __future__ import annotations
+from typing import Optional, Any
+
+from typing import Annotated, Literal, Sequence, TypedDict
 
 from langgraph.graph import add_messages
 
@@ -19,23 +21,23 @@ class AgentState(TypedDict):
     user_input: str
 
     # 画像状态
-    profile: dict[str, Any] | None
+    profile: Optional[dict[str, Any]]
     profile_dimensions: list[dict[str, Any]]
 
     # 学习内容
-    current_content: dict[str, Any] | None
-    content_type: Literal["explanation", "mindmap", "quiz", "reading", "video", "code"] | None
+    current_content: Optional[dict[str, Any]]
+    content_type: Optional[Literal["explanation", "mindmap", "quiz", "reading", "video", "code"]]
 
     # 对话上下文
     conversation_context: list[dict[str, str]]
-    agent_output: str | None
+    agent_output: Optional[str]
 
     # 路由
-    next_agent: str | None
+    next_agent: Optional[str]
     is_complete: bool
 
     # 任务追踪
-    current_task: str | None
+    current_task: Optional[str]
     errors: list[str]
 
 

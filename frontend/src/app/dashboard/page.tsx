@@ -63,7 +63,7 @@ const stats = [
 
 const activities = [
   { icon: "💬", title: "完成对话式画像构建", time: "2 小时前", duration: "15 分钟" },
-  { icon: "📚", title: "学习了"算法基础 — 动态规划入门"", time: "昨天 14:30", duration: "45 分钟" },
+  { icon: "📚", title: "学习了《算法基础 — 动态规划入门》", time: "昨天 14:30", duration: "45 分钟" },
   { icon: "✏️", title: "完成线性代数练习题 (得分 88%)", time: "昨天 10:00", duration: "30 分钟" },
   { icon: "🗺️", title: "学习路径已更新", time: "前天", duration: "新增 2 个节点" },
 ];

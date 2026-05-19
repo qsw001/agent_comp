@@ -1,6 +1,9 @@
 """
 API — 画像路由
 """
+
+from __future__ import annotations
+from typing import Optional
 from fastapi import APIRouter, Depends, Header
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
