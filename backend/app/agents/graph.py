@@ -105,14 +105,18 @@ async def run_agent(user_input: str, user_id: str, thread_id: Optional[str] = No
         "user_input": user_input,
         "profile": None,
         "profile_dimensions": [],
+        "profile_dialogue_round": 0,
         "current_content": None,
         "content_type": None,
+        "generated_resources": [],
         "conversation_context": [],
         "agent_output": None,
         "next_agent": None,
         "is_complete": False,
         "current_task": None,
         "errors": [],
+        "assessment_data": None,
+        "learning_progress": 0.0,
     }
 
     result = await agent_graph.ainvoke(initial_state, config)
