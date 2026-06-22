@@ -4,6 +4,7 @@ API — 认证路由
 
 from __future__ import annotations
 from fastapi import APIRouter, Depends, Header
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -33,6 +34,38 @@ from app.services.email_code_service import (
 )
 
 router = APIRouter()
+
+
+# ─── 开发环境：免密码测试登录 ──────────────────────
+
+class DevLoginRequest(BaseModel):
+    username: str
+
+
+@router.post("/dev-login", response_model=ApiResponse[TokenResponse])
+async def dev_login(body: DevLoginRequest, db: AsyncSession = Depends(get_db)):
+    """开发环境测试登录 — 跳过密码验证，仅限 ENV=development"""
+    if settings.ENV != "development":
+        raise UnauthorizedException("dev-login 仅在开发环境可用")
+
+    identifier = body.username.strip()
+    result = await db.execute(
+        select(User).where(
+            (User.username == identifier) | (User.email == identifier.lower())
+        )
+    )
+    user = result.scalar_one_or_none()
+    if not user:
+        raise UnauthorizedException("用户不存在")
+    if not user.is_active:
+        raise UnauthorizedException("账号已被禁用")
+
+    token = create_access_token(sub=user.id)
+
+    return ApiResponse(data=TokenResponse(
+        access_token=token,
+        expires_in=settings.JWT_EXPIRATION_HOURS,
+    ))
 
 
 def _to_user_response(user: User) -> UserResponse:

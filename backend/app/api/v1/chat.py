@@ -135,12 +135,18 @@ async def send_message(
         profile_dims = agent_result.get("profile_dimensions", [])
         assessment_data = agent_result.get("assessment_data")
         is_complete = agent_result.get("is_complete", False)
+        citations = agent_result.get("citations", [])
+        retrieval_used = agent_result.get("retrieval_used", False)
+        confidence = agent_result.get("confidence")
 
         # 构建元数据
         metadata = {
             "agent_used": agent_result.get("next_agent", "qa_agent"),
             "profile_dimensions_count": len(profile_dims),
             "profile_complete": is_complete,
+            "citations": citations,
+            "retrieval_used": retrieval_used,
+            "confidence": confidence,
         }
         if generated_resources:
             metadata["resources"] = generated_resources

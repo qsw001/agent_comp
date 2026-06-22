@@ -45,6 +45,11 @@ class AgentState(TypedDict):
     assessment_data: Optional[dict[str, Any]]
     learning_progress: float  # 0.0-1.0
 
+    # ── RAG / 检索增强 ──
+    citations: list[dict[str, Any]]
+    retrieval_used: bool
+    confidence: Optional[float]
+
 
 AGENT_ROUTER = "router"
 AGENT_PROFILING = "profiling_agent"

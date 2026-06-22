@@ -117,6 +117,9 @@ async def run_agent(user_input: str, user_id: str, thread_id: Optional[str] = No
         "errors": [],
         "assessment_data": None,
         "learning_progress": 0.0,
+        "citations": [],
+        "retrieval_used": False,
+        "confidence": None,
     }
 
     result = await agent_graph.ainvoke(initial_state, config)

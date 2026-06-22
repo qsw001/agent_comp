@@ -3,7 +3,46 @@ RAG — 检索器
 """
 from __future__ import annotations
 
-from app.rag.vector_store import search_similar
+from typing import Any
+
+from app.config import settings
+from app.rag.embeddings import embed_batch
+from app.rag.vector_store import get_qdrant_client
+
+
+async def _search_qdrant(
+    query: str,
+    top_k: int = 5,
+    score_threshold: float = 0.5,
+    filters: dict | None = None,
+) -> list[dict[str, Any]]:
+    """
+    直接通过 query_points API 检索 Qdrant（绕过已废弃的 client.search()）。
+
+    Returns:
+        list[dict]: 每项含 id, score, payload 字段
+    """
+    client = get_qdrant_client()
+    collection = settings.QDRANT_COLLECTION
+    query_vector = embed_batch([query])[0]
+
+    response = client.query_points(
+        collection_name=collection,
+        query=query_vector,
+        limit=top_k,
+        score_threshold=score_threshold,
+        with_payload=True,
+    )
+
+    points = response.points if hasattr(response, "points") else []
+    return [
+        {
+            "id": p.id,
+            "score": p.score,
+            **p.payload,
+        }
+        for p in points
+    ]
 
 
 async def retrieve_context(
@@ -24,7 +63,7 @@ async def retrieve_context(
     Returns:
         上下文文本
     """
-    results = await search_similar(
+    results = await _search_qdrant(
         query=query,
         top_k=top_k,
         score_threshold=0.5,
@@ -74,3 +113,46 @@ def build_rag_prompt(query: str, context: str) -> list[dict]:
     messages.append({"role": "user", "content": query})
 
     return messages
+
+
+async def retrieve_with_metadata(
+    query: str,
+    top_k: int = 5,
+    filters: dict | None = None,
+    score_threshold: float = 0.5,
+) -> tuple[str, list[dict]]:
+    """
+    检索 RAG 上下文，同时返回结构化结果用于构建 citations。
+
+    Args:
+        query: 用户问题
+        top_k: 检索文档数
+        filters: 过滤条件
+        score_threshold: 相似度阈值
+
+    Returns:
+        (context_string, results_list)
+        - context_string: 拼接的上下文文本（供 LLM prompt 使用）
+        - results_list: 原始检索结果列表，每项含 score, page_number, chapter 等
+    """
+    results = await _search_qdrant(
+        query=query,
+        top_k=top_k,
+        score_threshold=score_threshold,
+        filters=filters,
+    )
+
+    if not results:
+        return "", []
+
+    context_parts = []
+    for i, doc in enumerate(results, 1):
+        title = doc.get("title", "未命名")
+        content = doc.get("content", "")
+        page = doc.get("page_number", "?")
+        chapter = doc.get("chapter", "")
+        source = f"[来源: {chapter} 第{page}页]" if chapter else f"[来源: 第{page}页]"
+        context_parts.append(f"[{i}] {title} {source}\n{content}")
+
+    context = "\n\n---\n\n".join(context_parts)
+    return context, results

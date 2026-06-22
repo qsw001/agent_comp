@@ -12,7 +12,40 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
+from sqlalchemy import create_engine, select as sa_select
+from sqlalchemy.orm import Session as SaSession
+
 from app.agents.state import AgentState
+from app.config import settings
+
+
+def _load_profile_from_db_sync(user_id: str) -> tuple:
+    """从数据库同步加载用户已有画像，供 router 使用"""
+    if not user_id:
+        return None, []
+    try:
+        from app.models import LearnerProfile
+        sync_engine = create_engine(settings.DATABASE_URL_SYNC, echo=False)
+        with SaSession(sync_engine) as session:
+            stmt = sa_select(LearnerProfile).where(
+                LearnerProfile.user_id == user_id
+            ).order_by(LearnerProfile.updated_at.desc()).limit(1)
+            result = session.execute(stmt)
+            profile_row = result.scalar_one_or_none()
+            if profile_row and profile_row.dimensions:
+                raw = profile_row.dimensions
+                if isinstance(raw, list):
+                    dims = raw
+                elif isinstance(raw, dict):
+                    # DB 中存储为 {dim_name: {...}} 格式，转为列表
+                    dims = [{"name": k, **v} if isinstance(v, dict) else {"name": k, "value": v} for k, v in raw.items()]
+                else:
+                    dims = []
+                return {"id": profile_row.id, "name": profile_row.name}, dims
+        sync_engine.dispose()
+    except Exception:
+        pass
+    return None, []
 
 
 # ────────────────────────────────────────────────────────────────
@@ -25,11 +58,11 @@ def router_node(state: AgentState) -> dict:
     profile = state.get("profile")
     profile_dims = state.get("profile_dimensions", [])
 
-    # 画像未完成 → 引导构建画像
-    if not profile or len(profile_dims) < 6:
-        return {"next_agent": "profiling_agent", "current_task": "build_profile"}
+    # 若 state 中无画像，尝试从数据库加载已有画像
+    if not profile:
+        profile, profile_dims = _load_profile_from_db_sync(state.get("user_id", ""))
 
-    # 关键词意图路由
+    # 关键词意图路由（先于画像检查，避免机器人问题被拦截）
     intent_map = {
         "content_gen_agent": [
             "讲解", "学习", "内容", "知识", "课程", "教", "资源", "生成",
@@ -49,6 +82,10 @@ def router_node(state: AgentState) -> dict:
     for agent, keywords in intent_map.items():
         if any(kw in user_input for kw in keywords):
             return {"next_agent": agent, "current_task": f"route to {agent}"}
+
+    # 无明确意图 + 无画像 → 引导构建画像
+    if not profile or len(profile_dims) < 6:
+        return {"next_agent": "profiling_agent", "current_task": "build_profile"}
 
     # 默认：智能辅导
     return {"next_agent": "qa_agent", "current_task": "qa"}
@@ -337,7 +374,6 @@ def _dimension_emoji(name: str) -> str:
 def content_gen_agent_node(state: AgentState) -> dict:
     """
     内容生成 Agent — 调用子智能体协同生成多种资源。
-    子智能体: DocumentAgent, MindmapAgent, QuizAgent, VideoAgent, CodeCaseAgent, SlidesAgent, ReadingAgent
     """
     user_input = state.get("user_input", "")
     profile = state.get("profile_dimensions", [])
@@ -942,75 +978,127 @@ def _get_difficulty(profile: list[dict]) -> str:
 
 
 # ────────────────────────────────────────────────────────────────
-# QA Agent — 智能辅导（多模态答疑）
+# QA Agent — RAG 检索增强智能答疑
 # ────────────────────────────────────────────────────────────────
 
-def qa_agent_node(state: AgentState) -> dict:
-    """答疑 Agent — 多模态智能辅导"""
-    user_input = state.get("user_input", "")
-    profile = state.get("profile_dimensions", [])
+# RAG system prompt: 约束 LLM 仅依据检索片段回答
+_RAG_SYSTEM_PROMPT = """\
+你是 AI 教育助手，专门负责回答关于《随机过程及应用》课程的问题。
 
-    answer = _generate_tutoring_response(user_input, profile)
+回答规则：
+1. 你只能依据下方「参考资料」中的内容回答问题，不得使用外部知识编造教材页码、公式或章节。
+2. 如果参考资料中有相关信息，请详细、有条理地回答，并在回答末尾注明引用的页码。
+3. 如果参考资料中没有足够信息，请明确回复："当前课程知识库中未找到足够依据来回答此问题。建议换一种问法或查阅教材相关章节。"
+4. 回答使用中文，适合学习场景，鼓励学生追问。
+5. 引用格式示例：（见教材第62页）"""
+
+
+async def qa_agent_node(state: AgentState) -> dict:
+    """答疑 Agent — RAG 检索 + LLM 回答 + citations"""
+    user_input = state.get("user_input", "")
+
+    # ── 1. 检索课程知识库 ──
+    from app.rag.retriever import retrieve_with_metadata, build_rag_prompt
+
+    try:
+        context, results = await retrieve_with_metadata(
+            query=user_input,
+            top_k=5,
+            score_threshold=0.5,
+        )
+    except Exception as exc:
+        # Qdrant 连接失败等
+        return {
+            "agent_output": f"抱歉，检索课程知识库时出现问题：{exc}\n请稍后重试。",
+            "citations": [],
+            "retrieval_used": False,
+            "confidence": None,
+            "next_agent": None,
+            "is_complete": True,
+        }
+
+    # ── 2. 无有效检索结果 → 直接返回提示 ──
+    if not results or not context.strip():
+        return {
+            "agent_output": (
+                "当前课程知识库中未找到足够依据来回答此问题。\n\n"
+                "建议：\n"
+                "1. 尝试换一种更具体的问法\n"
+                "2. 查阅《随机过程及应用》教材相关章节\n"
+                "3. 询问其他随机过程相关的问题"
+            ),
+            "citations": [],
+            "retrieval_used": False,
+            "confidence": None,
+            "next_agent": None,
+            "is_complete": True,
+        }
+
+    # ── 3. 构建 citations ──
+    citations = _build_citations(results)
+
+    # ── 4. 计算 confidence（基于最高检索 score） ──
+    top_score = max((r.get("score", 0) for r in results), default=0)
+    confidence = min(max(top_score, 0.0), 1.0)
+
+    # ── 5. 构建 RAG prompt 并调用 LLM ──
+    messages = build_rag_prompt(user_input, context)
+    # 替换 system prompt 为定制版本
+    if messages and messages[0]["role"] == "system":
+        messages[0]["content"] = _RAG_SYSTEM_PROMPT
+
+    try:
+        from app.llm import LLMFactory
+        response = await LLMFactory.chat(messages)
+        answer = response.content.strip() if response and response.content else ""
+    except Exception:
+        # LLM 调用失败 → 降级为检索片段摘要
+        answer = _build_fallback_from_results(results)
 
     return {
         "agent_output": answer,
+        "citations": citations,
+        "retrieval_used": True,
+        "confidence": confidence,
         "next_agent": None,
-        "is_complete": False,
+        "is_complete": True,
     }
 
 
-def _generate_tutoring_response(question: str, profile: list[dict]) -> str:
-    """生成多模态辅导回答"""
-    # 适配认知风格
-    cognitive = next((d for d in profile if d["name"] == "cognitive_style"), None)
-    style_desc = cognitive.get("description", "").lower() if cognitive else ""
+def _build_citations(results: list[dict]) -> list[dict]:
+    """从检索结果构建 citations 列表"""
+    citations = []
+    for r in results:
+        content = r.get("content", "")
+        snippet = content[:160].replace("\n", " ").strip() if content else ""
+        citations.append({
+            "source_file": r.get("source_file", ""),
+            "page_number": r.get("page_number", 0),
+            "chapter": r.get("chapter", ""),
+            "chunk_id": r.get("chunk_id", ""),
+            "score": r.get("score", 0),
+            "content_snippet": snippet,
+        })
+    return citations
 
-    style_prefix = ""
-    if "视觉" in style_desc:
-        style_prefix = "📊 以下从多角度为你图文并茂地解答："
-    elif "动手" in style_desc:
-        style_prefix = "🛠️ 我会结合可操作的示例来解答："
-    elif "阅读" in style_desc:
-        style_prefix = "📖 以下是结构化的详细解答："
-    else:
-        style_prefix = "💡 以下从多个维度为你解答："
 
-    lines = [f"### {style_prefix}\n"]
-    lines.append(f"**你的问题**：{question}\n")
+def _build_fallback_from_results(results: list[dict]) -> str:
+    """LLM 调用失败时，用检索到的原始片段构建回答"""
+    if not results:
+        return "抱歉，课程知识库中未找到足够依据，且 AI 服务当前不可用。请稍后重试。"
 
-    # ── 文字解答 ──
-    lines.append("#### 📝 核心解答\n")
-    lines.append(f"这个问题涉及几个关键点，我逐步拆解：\n")
-    lines.append("1. **概念澄清**：首先明确问题的核心概念定义\n")
-    lines.append("2. **原理解析**：从底层原理理解为什么\n")
-    lines.append("3. **实践指导**：在实际中应该如何应对\n")
-
-    # ── 图解说明 ──
-    lines.append(f"\n#### 🎨 图解说明\n")
-    lines.append("```mermaid")
-    lines.append("graph TD")
-    lines.append(f"    Q[问题: {question[:20]}...] --> A[核心概念]")
-    lines.append("    A --> B[原理层]")
-    lines.append("    A --> C[应用层]")
-    lines.append("    B --> D[深入理解]")
-    lines.append("    C --> E[实践掌握]")
-    lines.append("```\n")
-
-    # ── 类比 ──
-    analogies = [
-        "就像搭积木，基础知识是底层积木，复杂概念是它们的组合结构。",
-        "可以类比做菜：核心概念是食材，方法是烹饪技巧，实践就是下厨。",
-        "这就像开车，理论是交通规则，实操是方向盘，两者缺一不可。",
+    lines = [
+        "⚠️ AI 服务暂时不可用，以下是从课程资料中直接检索到的相关内容：",
+        "",
     ]
-    import random
-    lines.append(f"#### 💭 类比理解\n")
-    lines.append(f"> {random.choice(analogies)}\n")
-
-    # ── 拓展 ──
-    lines.append(f"#### 🔗 相关知识点\n")
-    lines.append(f"- 前置知识：该领域的核心基础概念\n")
-    lines.append(f"- 后续方向：进阶话题和前沿发展\n")
-    lines.append(f"- 交叉领域：与其他知识模块的关联\n")
+    for i, r in enumerate(results, 1):
+        page = r.get("page_number", "?")
+        chapter = r.get("chapter", "")
+        content = r.get("content", "")[:500].replace("\n", " ")
+        source = f"（{chapter} 第{page}页）" if chapter else f"（第{page}页）"
+        lines.append(f"**【片段 {i}】** {source}")
+        lines.append(f"> {content}")
+        lines.append("")
 
     return "\n".join(lines)
 
