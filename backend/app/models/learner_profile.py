@@ -1,11 +1,12 @@
 """
 数据库模型 — 学习者画像
 """
+
 from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import Optional,  TYPE_CHECKING
 
 from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
@@ -30,7 +31,7 @@ class LearnerProfile(Base):
         UUID(as_uuid=False), ForeignKey("users.id"), unique=True, nullable=False
     )
     name: Mapped[str] = mapped_column(String(128), nullable=False)
-    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # JSON 存储画像维度 { "knowledge": 65, "cognitive": 78, ... }
     dimensions: Mapped[dict] = mapped_column(JSONB, default=dict)

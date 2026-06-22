@@ -19,7 +19,6 @@ class ApiClient {
     });
 
     this.client.interceptors.request.use((config) => {
-      // 从 localStorage 读取 token
       const token =
         typeof window !== "undefined" ? localStorage.getItem("auth_token") : null;
       if (token) {
@@ -32,9 +31,9 @@ class ApiClient {
       (response) => response,
       (error: AxiosError<ApiResponse<never>>) => {
         if (error.response?.status === 401) {
-          // Token 过期，清除并跳转登录
           if (typeof window !== "undefined") {
             localStorage.removeItem("auth_token");
+            document.cookie = "auth_token=; path=/; max-age=0; SameSite=Lax";
             window.location.href = "/login";
           }
         }
@@ -63,9 +62,6 @@ class ApiClient {
     return response.data;
   }
 
-  /**
-   * SSE 流式请求（用于对话/AI 回复）
-   */
   async stream(
     url: string,
     body: unknown,

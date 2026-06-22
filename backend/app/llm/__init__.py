@@ -1,7 +1,9 @@
 """
 LLM Provider — 统一工厂 & 注册中心
 """
+
 from __future__ import annotations
+from typing import Optional
 
 from functools import lru_cache
 from typing import AsyncGenerator
@@ -22,7 +24,7 @@ class LLMFactory:
         cls._providers[name] = provider_cls
 
     @classmethod
-    def get_provider(cls, name: str | None = None) -> BaseLLM:
+    def get_provider(cls, name: Optional[str] = None) -> BaseLLM:
         """获取 Provider 实例（带缓存）"""
         name = name or settings.LLM_DEFAULT_PROVIDER
 
@@ -43,7 +45,7 @@ class LLMFactory:
     async def chat(
         cls,
         messages: list[dict],
-        provider: str | None = None,
+        provider: Optional[str] = None,
         config: LLMConfig | None = None,
     ) -> LLMResponse:
         """对话补全（首选 Provider 失败时自动 fallback）"""
@@ -64,7 +66,7 @@ class LLMFactory:
     async def chat_stream(
         cls,
         messages: list[dict],
-        provider: str | None = None,
+        provider: Optional[str] = None,
         config: LLMConfig | None = None,
     ) -> AsyncGenerator[str, None]:
         """流式对话补全"""
@@ -73,7 +75,7 @@ class LLMFactory:
             yield chunk
 
     @classmethod
-    def _get_providers_in_order(cls, preferred: str | None = None) -> list[str]:
+    def _get_providers_in_order(cls, preferred: Optional[str] = None) -> list[str]:
         """获取尝试顺序（首选 + fallback）"""
         if not settings.ENV == "development":
             # 生产环境只尝试已配置的

@@ -1,6 +1,9 @@
 """
 异常处理
 """
+
+from __future__ import annotations
+from typing import Optional
 from fastapi import HTTPException, status
 
 
@@ -12,7 +15,7 @@ class AppException(HTTPException):
         status_code: int,
         code: str,
         message: str,
-        details: dict[str, list[str]] | None = None,
+        details: Optional[dict[str, list[str]]] = None,
     ):
         super().__init__(status_code=status_code, detail={"code": code, "message": message, "details": details})
         self.code = code
@@ -48,7 +51,7 @@ class ForbiddenException(AppException):
 
 
 class ValidationException(AppException):
-    def __init__(self, message: str, details: dict[str, list[str]] | None = None):
+    def __init__(self, message: str, details: Optional[dict[str, list[str]]] = None):
         super().__init__(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             code="VALIDATION_ERROR",

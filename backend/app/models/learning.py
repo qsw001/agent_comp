@@ -1,11 +1,12 @@
 """
 数据库模型 — 对话会话、消息、学习内容 & 路径
 """
+
 from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import Optional,  TYPE_CHECKING
 
 from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
@@ -59,7 +60,7 @@ class ChatMessage(Base):
         String(32), default="text",
         comment="text | markdown | mindmap | quiz | code | image"
     )
-    metadata_: Mapped[dict | None] = mapped_column(
+    metadata_: Mapped[Optional[dict]] = mapped_column(
         "metadata", JSONB, nullable=True, default=dict
     )
     created_at: Mapped[datetime] = mapped_column(
@@ -86,7 +87,7 @@ class LearningContent(Base):
     subject: Mapped[str] = mapped_column(String(128), nullable=False)
     difficulty: Mapped[int] = mapped_column(Integer, default=3)
     content: Mapped[str] = mapped_column(Text, nullable=False)
-    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     tags: Mapped[list] = mapped_column(JSONB, default=list)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

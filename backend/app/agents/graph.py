@@ -1,7 +1,9 @@
 """
 LangGraph Agent — Agent 图编排
 """
+
 from __future__ import annotations
+from typing import Optional
 
 from langgraph.graph import END, StateGraph
 from langgraph.checkpoint.memory import MemorySaver
@@ -76,7 +78,7 @@ def build_agent_graph() -> StateGraph:
 agent_graph = build_agent_graph()
 
 
-async def run_agent(user_input: str, user_id: str, thread_id: str | None = None) -> dict:
+async def run_agent(user_input: str, user_id: str, thread_id: Optional[str] = None) -> dict:
     """
     运行 Agent 并返回结果
 
@@ -103,14 +105,21 @@ async def run_agent(user_input: str, user_id: str, thread_id: str | None = None)
         "user_input": user_input,
         "profile": None,
         "profile_dimensions": [],
+        "profile_dialogue_round": 0,
         "current_content": None,
         "content_type": None,
+        "generated_resources": [],
         "conversation_context": [],
         "agent_output": None,
         "next_agent": None,
         "is_complete": False,
         "current_task": None,
         "errors": [],
+        "assessment_data": None,
+        "learning_progress": 0.0,
+        "citations": [],
+        "retrieval_used": False,
+        "confidence": None,
     }
 
     result = await agent_graph.ainvoke(initial_state, config)
