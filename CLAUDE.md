@@ -21,6 +21,10 @@ ai-education-platform/
 │   │   ├── core/                    #   安全、异常、Redis
 │   │   ├── llm/                     #   LLM Provider 工厂模式（4 个 Provider）
 │   │   ├── rag/                     #   RAG 检索增强（Qdrant + Embedding）
+│   │   │   ├── embeddings.py       #     Sentence-Transformer 嵌入
+│   │   │   ├── pdf_processor.py    #     PDF 解析 + OCR（扫描件降级）
+│   │   │   ├── vector_store.py     #     Qdrant 操作
+│   │   │   └── retriever.py        #     检索 + 构建 prompt
 │   │   ├── models/                  #   SQLAlchemy 模型（7 张表）
 │   │   ├── schemas/                 #   Pydantic 请求/响应
 │   │   ├── services/                #   业务服务层

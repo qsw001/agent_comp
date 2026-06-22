@@ -1,145 +1,153 @@
-/**
- * 前端类型定义 — AI 教育平台
- */
+// ── API 类型定义 ──
 
-// ─── 学习者画像 ──────────────────────────────────
-
-export interface LearnerProfile {
-  id: string;
-  userId: string;
-  name: string;
-  dimensions: ProfileDimension[];
-  summary: string;
-  createdAt: string;
-  updatedAt: string;
+export interface ApiResponse<T = any> {
+  success: boolean
+  message?: string
+  data?: T
+  error?: { code: string; message: string }
 }
 
+// ── 用户 ──
+export interface User {
+  id: string
+  username: string
+  email?: string
+  major?: string
+}
+
+// ── 画像维度 ──
 export interface ProfileDimension {
-  name: string;
-  value: number; // 0-100
-  label: string;
-  description?: string;
+  name: string
+  value: number
+  label: string
+  description: string
 }
 
-// ─── 对话 ────────────────────────────────────────
-
-export interface ChatSession {
-  id: string;
-  title: string;
-  createdAt: string;
-  updatedAt: string;
+// ── 学习画像 ──
+export interface LearnerProfile {
+  id: string
+  user_id: string
+  name: string
+  summary?: string
+  dimensions: Record<string, { value: number; label: string; description: string }>
+  status: string
+  created_at: string
+  updated_at: string
 }
 
-export interface ChatMessage {
-  id: string;
-  sessionId: string;
-  role: "user" | "assistant" | "system";
-  content: string;
-  contentType: MessageContentType;
-  metadata?: Record<string, unknown>;
-  createdAt: string;
+// ── 学习资源 ──
+export type ResourceType = 'document' | 'mindmap' | 'quiz' | 'reading' | 'video' | 'code' | 'slides'
+
+export interface LearningResource {
+  id: string
+  type: ResourceType
+  title: string
+  content: any
+  difficulty: string
+  tags: string[]
+  created_at?: string
 }
 
-export type MessageContentType =
-  | "text"
-  | "markdown"
-  | "mindmap"
-  | "quiz"
-  | "code"
-  | "image";
-
-// ─── 学习内容 ────────────────────────────────────
-
-export interface LearningContent {
-  id: string;
-  title: string;
-  type: LearningContentType;
-  subject: string;
-  difficulty: 1 | 2 | 3 | 4 | 5;
-  content: string;
-  description?: string;
-  tags: string[];
-  createdAt: string;
+// ── 学习路径节点 ──
+export interface PathNode {
+  order: number
+  title: string
+  description: string
+  resource_types: ResourceType[]
+  estimated_hours: number
+  completed: boolean
 }
 
-export type LearningContentType =
-  | "explanation"
-  | "mindmap"
-  | "quiz"
-  | "reading"
-  | "video"
-  | "code";
-
-// ─── 学习路径 ────────────────────────────────────
-
+// ── 学习路径 ──
 export interface LearningPath {
-  id: string;
-  profileId: string;
-  goal: string;
-  nodes: LearningPathNode[];
-  progress: number;
-  createdAt: string;
-  updatedAt: string;
+  id: string
+  profile_id: string
+  goal: string
+  nodes: PathNode[]
+  progress: number
+  created_at: string
+  updated_at: string
 }
 
-export interface LearningPathNode {
-  id: string;
-  title: string;
-  description: string;
-  status: "pending" | "in_progress" | "completed" | "skipped";
-  order: number;
-  estimatedMinutes: number;
-  contentType: LearningContentType;
-  prerequisites: string[];
+// ── RAG 引用来源 ──
+export interface Citation {
+  source_file: string
+  page_number: number
+  chapter: string
+  chunk_id: string
+  score: number
+  content_snippet: string
 }
 
-// ─── 评估 ────────────────────────────────────────
-
-export interface Evaluation {
-  id: string;
-  contentId: string;
-  score: number;
-  feedback: string;
-  submittedAt: string;
+// ── 聊天消息元数据 ──
+export interface ChatMessageMetadata {
+  agent_used?: string
+  profile_dimensions_count?: number
+  profile_complete?: boolean
+  citations?: Citation[]
+  retrieval_used?: boolean
+  confidence?: number | null
+  resources?: any[]
+  assessment?: any
+  error?: string
+  [key: string]: any
 }
 
+// ── 聊天消息 ──
+export interface ChatMessage {
+  id: string
+  session_id: string
+  role: 'user' | 'assistant'
+  content: string
+  content_type: string
+  metadata?: ChatMessageMetadata
+  created_at: string
+}
+
+// ── 聊天会话 ──
+export interface ChatSession {
+  id: string
+  title: string
+  created_at: string
+  updated_at: string
+}
+
+// ── 评估 ──
+export interface Assessment {
+  id: string
+  profile_id: string
+  content_id: string
+  score: number
+  feedback: string
+  submitted_at: string
+}
+
+// ── 学习进度 ──
 export interface LearningProgress {
-  profileId: string;
-  totalContents: number;
-  completedContents: number;
-  averageScore: number;
-  timeSpentMinutes: number;
-  strengths: string[];
-  weaknesses: string[];
-  recommendations: string[];
+  profile_id: string
+  total_contents: number
+  completed_contents: number
+  average_score: number
+  time_spent_minutes: number
+  strengths: string[]
+  weaknesses: string[]
+  recommendations: string[]
 }
 
-// ─── API 响应 ────────────────────────────────────
-
-export interface ApiResponse<T> {
-  success: boolean;
-  data?: T;
-  error?: ApiError;
-  meta?: PaginationMeta;
+// ── 资源生成请求 ──
+export interface ResourceGenerateRequest {
+  topic: string
+  types: ResourceType[]
+  profile_dims?: ProfileDimension[]
 }
 
-export interface ApiError {
-  code: string;
-  message: string;
-  details?: Record<string, string[]>;
-}
-
-export interface PaginationMeta {
-  page: number;
-  pageSize: number;
-  total: number;
-  totalPages: number;
-}
-
-// ─── SSE 流式响应 ────────────────────────────────
-
-export interface StreamChunk {
-  type: "text" | "done" | "error";
-  content?: string;
-  metadata?: Record<string, unknown>;
+// ── 资源类型元数据 ──
+export const RESOURCE_TYPE_META: Record<ResourceType, { name: string; icon: string; color: string }> = {
+  document: { name: '课程讲解', icon: '📖', color: '#3B82F6' },
+  mindmap:   { name: '思维导图', icon: '🧠', color: '#8B5CF6' },
+  quiz:      { name: '练习题',   icon: '📝', color: '#F59E0B' },
+  reading:   { name: '拓展阅读', icon: '📚', color: '#10B981' },
+  video:     { name: '教学视频', icon: '🎬', color: '#EF4444' },
+  code:      { name: '实操案例', icon: '💻', color: '#06B6D4' },
+  slides:    { name: '教学PPT',  icon: '📊', color: '#EC4899' },
 }

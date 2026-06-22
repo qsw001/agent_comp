@@ -62,8 +62,13 @@ def router_node(state: AgentState) -> dict:
     if not profile:
         profile, profile_dims = _load_profile_from_db_sync(state.get("user_id", ""))
 
-    # 关键词意图路由（先于画像检查，避免机器人问题被拦截）
+    # 关键词意图路由（先于画像检查）
     intent_map = {
+        "qa_agent": [
+            "什么是", "是什么", "什么叫", "定义", "性质", "区别",
+            "概念", "原理", "为什么", "有哪些", "公式", "定理",
+            "证明", "推导", "如何计算", "举例", "举例说明", "解释",
+        ],
         "content_gen_agent": [
             "讲解", "学习", "内容", "知识", "课程", "教", "资源", "生成",
             "文档", "思维导图", "练习题", "题目", "视频", "动画", "代码",
