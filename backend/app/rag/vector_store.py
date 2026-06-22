@@ -3,6 +3,7 @@ RAG — 向量数据库 Qdrant
 """
 
 from __future__ import annotations
+import uuid
 from typing import Optional
 
 from typing import Any
@@ -13,6 +14,9 @@ from qdrant_client.http.models import Distance, VectorParams
 
 from app.config import settings
 from app.rag.embeddings import embed_batch
+
+# 固定 namespace，用于从 chunk_id 生成确定性 UUID
+_QDRANT_NS = uuid.uuid5(uuid.NAMESPACE_DNS, "ai-education-platform.qdrant")
 
 
 def get_qdrant_client() -> QdrantClient:
@@ -25,7 +29,7 @@ def get_qdrant_client() -> QdrantClient:
 
 async def ensure_collection(
     collection_name: Optional[str] = None,
-    vector_size: int = 768,
+    vector_size: int = 1024,
 ):
     """确保集合存在（不存在则创建）"""
     client = get_qdrant_client()
@@ -69,22 +73,33 @@ async def insert_documents(
     texts = [doc.get("content", "") for doc in documents]
     embeddings = embed_batch(texts)
 
-    points = [
-        models.PointStruct(
-            id=doc.get("id", hash(doc.get("title", ""))),
-            vector=emb,
-            payload={
-                "title": doc.get("title", ""),
-                "content": doc.get("content", ""),
-                "type": doc.get("type", ""),
-                "subject": doc.get("subject", ""),
-                "difficulty": doc.get("difficulty", 3),
-                "tags": doc.get("tags", []),
-                "metadata": doc.get("metadata", {}),
-            },
+    points = []
+    for doc, emb in zip(documents, embeddings):
+        # 基于 chunk_id 生成确定性 UUID（同名 chunk_id → 同一 UUID，支持 upsert）
+        key = doc.get("chunk_id") or doc.get("content_hash") or ""
+        point_id = str(uuid.uuid5(_QDRANT_NS, key)) if key else str(uuid.uuid4())
+        points.append(
+            models.PointStruct(
+                id=point_id,
+                vector=emb,
+                payload={
+                    # ── 顶层必填字段 ──
+                    "source_file": doc.get("source_file", ""),
+                    "page_number": doc.get("page_number", 0),
+                    "chapter": doc.get("chapter", ""),
+                    "chunk_id": doc.get("chunk_id", ""),
+                    "content_hash": doc.get("content_hash", ""),
+                    # ── 其他业务字段 ──
+                    "title": doc.get("title", ""),
+                    "content": doc.get("content", ""),
+                    "type": doc.get("type", ""),
+                    "subject": doc.get("subject", ""),
+                    "difficulty": doc.get("difficulty", 3),
+                    "tags": doc.get("tags", []),
+                    "metadata": doc.get("metadata", {}),
+                },
+            )
         )
-        for doc, emb in zip(documents, embeddings)
-    ]
 
     client.upsert(collection_name=collection, points=points)
 
