@@ -64,6 +64,11 @@ def router_node(state: AgentState) -> dict:
 
     # 关键词意图路由（先于画像检查）
     intent_map = {
+        "profiling_agent": [
+            "建立学习画像", "更新学习画像", "分析我的学习情况",
+            "了解我的基础", "评估我的学习能力", "我的学习偏好",
+            "我的薄弱点", "我适合怎样学习", "学习画像", "构建画像",
+        ],
         "qa_agent": [
             "什么是", "是什么", "什么叫", "定义", "性质", "区别",
             "概念", "原理", "为什么", "有哪些", "公式", "定理",
@@ -88,11 +93,7 @@ def router_node(state: AgentState) -> dict:
         if any(kw in user_input for kw in keywords):
             return {"next_agent": agent, "current_task": f"route to {agent}"}
 
-    # 无明确意图 + 无画像 → 引导构建画像
-    if not profile or len(profile_dims) < 6:
-        return {"next_agent": "profiling_agent", "current_task": "build_profile"}
-
-    # 默认：智能辅导
+    # 默认：智能辅导（所有未匹配意图均进入 QA）
     return {"next_agent": "qa_agent", "current_task": "qa"}
 
 
@@ -998,73 +999,111 @@ _RAG_SYSTEM_PROMPT = """\
 5. 引用格式示例：（见教材第62页）"""
 
 
-async def qa_agent_node(state: AgentState) -> dict:
-    """答疑 Agent — RAG 检索 + LLM 回答 + citations"""
-    user_input = state.get("user_input", "")
+async def prepare_rag_context(user_input: str) -> dict:
+    """
+    检索课程知识库并构建 LLM messages，供流式或非流式调用复用。
 
-    # ── 1. 检索课程知识库 ──
-    from app.rag.retriever import retrieve_with_metadata, build_rag_prompt
+    Args:
+        user_input: 用户问题原文
 
+    Returns:
+        dict with keys:
+          - success: bool                 是否成功检索到有效资料
+          - llm_messages: list[dict]      DeepSeek 消息列表（已注入 RAG prompt）
+          - citations: list[dict]         引用来源列表
+          - retrieval_used: bool          是否实际使用了 RAG
+          - confidence: float | None      置信度
+          - no_results_message: str      检索失败时的用户提示（success=False 时可用）
+          - fallback_results: list[dict]  LLM 失败降级时使用的原始检索结果
+    """
+    from app.rag.retriever import retrieve_robust, build_rag_prompt
+
+    # 1. 检索
     try:
-        context, results = await retrieve_with_metadata(
-            query=user_input,
+        context, results = await retrieve_robust(
+            user_input=user_input,
             top_k=5,
-            score_threshold=0.5,
         )
     except Exception as exc:
-        # Qdrant 连接失败等
         return {
-            "agent_output": f"抱歉，检索课程知识库时出现问题：{exc}\n请稍后重试。",
+            "success": False,
+            "llm_messages": [],
             "citations": [],
             "retrieval_used": False,
             "confidence": None,
-            "next_agent": None,
-            "is_complete": True,
+            "no_results_message": f"抱歉，检索课程知识库时出现问题：{exc}\n请稍后重试。",
+            "fallback_results": [],
         }
 
-    # ── 2. 无有效检索结果 → 直接返回提示 ──
+    # 2. 无结果
     if not results or not context.strip():
         return {
-            "agent_output": (
+            "success": False,
+            "llm_messages": [],
+            "citations": [],
+            "retrieval_used": False,
+            "confidence": None,
+            "no_results_message": (
                 "当前课程知识库中未找到足够依据来回答此问题。\n\n"
                 "建议：\n"
                 "1. 尝试换一种更具体的问法\n"
                 "2. 查阅《随机过程及应用》教材相关章节\n"
                 "3. 询问其他随机过程相关的问题"
             ),
-            "citations": [],
-            "retrieval_used": False,
-            "confidence": None,
+            "fallback_results": [],
+        }
+
+    # 3. citations + confidence
+    citations = _build_citations(results)
+    top_score = max((r.get("score", 0) for r in results), default=0)
+    confidence = min(max(top_score, 0.0), 1.0)
+
+    # 4. 构建 LLM messages
+    messages = build_rag_prompt(user_input, context)
+    if messages and messages[0]["role"] == "system":
+        messages[0]["content"] = _RAG_SYSTEM_PROMPT
+
+    return {
+        "success": True,
+        "llm_messages": messages,
+        "citations": citations,
+        "retrieval_used": True,
+        "confidence": confidence,
+        "no_results_message": None,
+        "fallback_results": results,
+    }
+
+
+async def qa_agent_node(state: AgentState) -> dict:
+    """答疑 Agent — RAG 检索 + LLM 回答 + citations"""
+    user_input = state.get("user_input", "")
+
+    ctx = await prepare_rag_context(user_input)
+
+    # 检索失败 → 直接返回提示
+    if not ctx["success"]:
+        return {
+            "agent_output": ctx["no_results_message"],
+            "citations": ctx["citations"],
+            "retrieval_used": ctx["retrieval_used"],
+            "confidence": ctx["confidence"],
             "next_agent": None,
             "is_complete": True,
         }
 
-    # ── 3. 构建 citations ──
-    citations = _build_citations(results)
-
-    # ── 4. 计算 confidence（基于最高检索 score） ──
-    top_score = max((r.get("score", 0) for r in results), default=0)
-    confidence = min(max(top_score, 0.0), 1.0)
-
-    # ── 5. 构建 RAG prompt 并调用 LLM ──
-    messages = build_rag_prompt(user_input, context)
-    # 替换 system prompt 为定制版本
-    if messages and messages[0]["role"] == "system":
-        messages[0]["content"] = _RAG_SYSTEM_PROMPT
-
+    # 检索成功 → 调用 LLM
     try:
         from app.llm import LLMFactory
-        response = await LLMFactory.chat(messages)
+        response = await LLMFactory.chat(ctx["llm_messages"])
         answer = response.content.strip() if response and response.content else ""
     except Exception:
-        # LLM 调用失败 → 降级为检索片段摘要
-        answer = _build_fallback_from_results(results)
+        answer = _build_fallback_from_results(ctx["fallback_results"])
 
     return {
         "agent_output": answer,
-        "citations": citations,
-        "retrieval_used": True,
-        "confidence": confidence,
+        "citations": ctx["citations"],
+        "retrieval_used": ctx["retrieval_used"],
+        "confidence": ctx["confidence"],
         "next_agent": None,
         "is_complete": True,
     }

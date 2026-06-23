@@ -3,15 +3,20 @@ API — 对话路由（增强版 — 集成多智能体系统）
 """
 
 from __future__ import annotations
+
+import json
+import uuid
 from typing import Optional
+
 from fastapi import APIRouter, Depends, Header
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.graph import run_agent
 from app.core.exceptions import NotFoundException, UnauthorizedException
 from app.core.security import decode_access_token
-from app.database import get_db
+from app.database import get_db, async_session_factory
 from app.models import ChatMessage, ChatSession
 from app.schemas import (
     ApiResponse,
@@ -188,3 +193,156 @@ async def send_message(
         metadata=assistant_msg.metadata_,
         created_at=assistant_msg.created_at,
     ))
+
+
+# ─── SSE 辅助 ───────────────────────────────────────
+
+def _sse_event(event: str, data: dict | str) -> str:
+    """构建一条 SSE 事件字符串"""
+    payload = json.dumps(data, ensure_ascii=False) if isinstance(data, dict) else data
+    return f"event: {event}\ndata: {payload}\n\n"
+
+
+# ─── 流式 QA 接口 ───────────────────────────────────
+
+@router.post("/send/stream")
+async def send_message_stream(
+    body: ChatMessageSend,
+    user_id: str = Depends(_get_current_user_id),
+):
+    """
+    SSE 流式问答 — 仅服务 QA/RAG 路径。
+
+    事件类型:
+      token — LLM 生成文本片段
+      done  — 流结束，携带 citations
+      error — 错误信息
+    """
+    from app.agents.nodes import prepare_rag_context
+    from app.llm import LLMFactory
+
+    # 使用独立 DB 会话（流式生成器生命周期超出 Depends 范围）
+    db = async_session_factory()
+
+    try:
+        # 1. 保存用户消息
+        user_msg = ChatMessage(
+            session_id=body.session_id,
+            role="user",
+            content=body.content,
+        )
+        db.add(user_msg)
+        await db.flush()
+
+        # 2. RAG 检索
+        ctx = await prepare_rag_context(body.content)
+
+        # 3. 检索失败 → 返回拒答 done 事件
+        if not ctx["success"]:
+            assistant_msg = ChatMessage(
+                session_id=body.session_id,
+                role="assistant",
+                content=ctx["no_results_message"] or "",
+                content_type="markdown",
+                metadata_={
+                    "citations": [],
+                    "retrieval_used": False,
+                    "confidence": None,
+                },
+            )
+            db.add(assistant_msg)
+            await db.commit()
+
+            async def no_results_generator():
+                yield _sse_event("done", {
+                    "content": ctx["no_results_message"] or "",
+                    "citations": [],
+                    "retrieval_used": False,
+                    "confidence": None,
+                    "message_id": assistant_msg.id,
+                })
+
+            return StreamingResponse(
+                no_results_generator(),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no",
+                },
+            )
+
+        # 4. 检索成功 → 流式 LLM
+        async def stream_generator():
+            collected_content = ""
+
+            try:
+                async for token in LLMFactory.chat_stream(ctx["llm_messages"]):
+                    collected_content += token
+                    yield _sse_event("token", {"content": token})
+            except Exception as exc:
+                yield _sse_event("error", {"message": f"LLM 调用失败: {exc}"})
+                return
+
+            # 构建 metadata
+            metadata = {
+                "citations": ctx["citations"],
+                "retrieval_used": True,
+                "confidence": ctx["confidence"],
+            }
+
+            # 保存助手消息到 DB
+            assistant_msg = ChatMessage(
+                session_id=body.session_id,
+                role="assistant",
+                content=collected_content,
+                content_type="markdown",
+                metadata_=metadata,
+            )
+            db.add(assistant_msg)
+
+            # 更新会话时间
+            result = await db.execute(
+                select(ChatSession).where(ChatSession.id == body.session_id)
+            )
+            session = result.scalar_one_or_none()
+            if session:
+                from datetime import datetime
+                session.updated_at = datetime.utcnow()
+
+            await db.commit()
+            await db.refresh(assistant_msg)
+
+            yield _sse_event("done", {
+                "content": collected_content,
+                "citations": ctx["citations"],
+                "retrieval_used": True,
+                "confidence": ctx["confidence"],
+                "message_id": assistant_msg.id,
+            })
+
+        return StreamingResponse(
+            stream_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    except Exception as exc:
+        await db.rollback()
+        async def error_generator():
+            yield _sse_event("error", {"message": str(exc)})
+        return StreamingResponse(
+            error_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+    finally:
+        await db.close()

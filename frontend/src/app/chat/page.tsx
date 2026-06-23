@@ -4,9 +4,56 @@ import { motion } from 'framer-motion'
 import { Navbar } from '@/components/layout/Navbar'
 import { Send, Sparkles, BookOpen, HelpCircle, Map, BarChart3, Loader2, ChevronDown, ChevronUp } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
+import remarkMath from 'remark-math'
+import rehypeKatex from 'rehype-katex'
+import 'katex/dist/katex.min.css'
 import type { Citation, ChatMessageMetadata } from '@/types'
 
-type Msg = { role: 'user' | 'assistant'; content: string; metadata?: ChatMessageMetadata }
+// ── LaTeX 定界符规范化 ──
+// 保护 fenced code block，仅在非代码段中转换定界符。
+// \(…\) / \[…\] → $…$ / $$…$$（避免 Markdown 转义吃掉反斜杠）
+// $begin:math:text$…$end:math:text$ → $…$
+// $begin:math:display$…$end:math:display$ → $$…$$
+
+function normalizeMathDelimiters(text: string): string {
+  // 按 ``` 分段，奇数索引（1,3,5…）为代码块，偶数索引（0,2,4…）为普通文本
+  const segments = text.split(/(```)/g)
+  if (segments.length <= 1) {
+    return _applyDelimiterRules(text)
+  }
+
+  const result: string[] = []
+  let inFence = false
+  for (const seg of segments) {
+    if (seg === '```') {
+      inFence = !inFence
+      result.push(seg)
+    } else if (inFence) {
+      result.push(seg)                      // 代码块：原样保留
+    } else {
+      result.push(_applyDelimiterRules(seg)) // 非代码段：执行替换
+    }
+  }
+  return result.join('')
+}
+
+function _applyDelimiterRules(text: string): string {
+  return text
+    // DeepSeek $begin/$end 格式 → 标准定界符
+    .replace(/\$begin:math:text\$/g, '$')
+    .replace(/\$end:math:text\$/g,   '$')
+    .replace(/\$begin:math:display\$/g, () => '$$')
+    .replace(/\$end:math:display\$/g,   () => '$$')
+    // \(…\) → $…$
+    .replace(/\\\(/g, () => '$')
+    .replace(/\\\)/g, () => '$')
+    // \[…\] → $$…$$
+    .replace(/\\\[/g, () => '$$')
+    .replace(/\\\]/g, () => '$$')
+}
+
+type Msg = { role: 'user' | 'assistant'; content: string; metadata?: ChatMessageMetadata; _localId?: string }
 
 export default function ChatPage() {
   const [messages, setMessages] = useState<Msg[]>([])
@@ -75,39 +122,95 @@ export default function ChatPage() {
   const sendMessage = async (content: string) => {
     if (!content.trim() || loading) return
 
-    // 首次发送前先创建会话
     const sid = await ensureSession()
     if (!sid) return
 
-    const userMsg: Msg = { role: 'user', content }
-    setMessages(prev => [...prev, userMsg])
+    const localId = crypto.randomUUID()
+    setMessages(prev => [...prev,
+      { role: 'user', content },
+      { role: 'assistant', content: '', _localId: localId },
+    ])
     setInput('')
     setLoading(true)
 
+    const token = localStorage.getItem('auth_token')
+    let reader: ReadableStreamDefaultReader<Uint8Array> | null = null
+
     try {
-      const token = localStorage.getItem('auth_token')
-      const res = await fetch(`${API_BASE}/chat/send`, {
+      const res = await fetch(`${API_BASE}/chat/send/stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...(token && { Authorization: `Bearer ${token}` }) },
         body: JSON.stringify({ session_id: sid, content }),
       })
-      const data = await res.json()
-      if (data.success && data.data) {
-        const aiMsg: Msg = { role: 'assistant', content: data.data.content, metadata: data.data.metadata }
-        setMessages(prev => [...prev, aiMsg])
-      } else {
-        setMessages(prev => [...prev, { role: 'assistant', content: '抱歉，处理请求时出现错误，请重试。' }])
+
+      if (!res.ok || !res.body) {
+        throw new Error(`HTTP ${res.status}`)
       }
-    } catch {
-      // 本地模拟回复
-      setTimeout(() => {
-        const mockResponse = generateMockResponse(content)
-        setMessages(prev => [...prev, { role: 'assistant', content: mockResponse }])
-        setLoading(false)
-      }, 1500)
-      return
+
+      reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      let currentEvent = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+
+        for (const line of lines) {
+          if (line.startsWith('event: ')) {
+            currentEvent = line.slice(7).trim()
+          } else if (line.startsWith('data: ')) {
+            let data: any
+            try { data = JSON.parse(line.slice(6)) } catch { continue }
+
+            if (currentEvent === 'token') {
+              setMessages(prev => prev.map(m =>
+                m._localId === localId
+                  ? { ...m, content: (m.content || '') + (data.content || '') }
+                  : m
+              ))
+            } else if (currentEvent === 'done') {
+              setMessages(prev => prev.map(m =>
+                m._localId === localId
+                  ? {
+                      ...m,
+                      content: data.content || m.content,
+                      metadata: {
+                        citations: data.citations || [],
+                        retrieval_used: data.retrieval_used ?? false,
+                        confidence: data.confidence ?? null,
+                      },
+                    }
+                  : m
+              ))
+            } else if (currentEvent === 'error') {
+              setMessages(prev => prev.filter(m => m._localId !== localId))
+              setError(data.message || '流式请求失败')
+            }
+            currentEvent = ''
+          }
+        }
+      }
+    } catch (err: any) {
+      // 移除占位消息
+      setMessages(prev => prev.filter(m => m._localId !== localId))
+      // 错误提示或 mock 降级
+      if (err.message?.includes('Failed to fetch') || err.message?.includes('NetworkError')) {
+        setTimeout(() => {
+          const mockResponse = generateMockResponse(content)
+          setMessages(prev => [...prev, { role: 'assistant', content: mockResponse }])
+          setLoading(false)
+        }, 1500)
+        return
+      }
+      setError(err.message || '请求失败，请重试')
+    } finally {
+      reader?.releaseLock()
+      setLoading(false)
     }
-    setLoading(false)
   }
 
   return (
@@ -185,15 +288,32 @@ export default function ChatPage() {
                   >
                     {msg.role === 'assistant' ? (
                       <ReactMarkdown
+                        remarkPlugins={[remarkGfm, remarkMath]}
+                        rehypePlugins={[rehypeKatex]}
                         components={{
-                          code: ({ children, ...props }: any) => (
-                            <code className="bg-slate-800 text-emerald-400 rounded px-1.5 py-0.5 text-xs" {...props}>
+                          code: ({ className, children, ...props }: any) => {
+                            const isBlock = Boolean(className)
+                            if (isBlock) {
+                              return (
+                                <pre className="my-2 overflow-x-auto rounded-lg bg-slate-800 px-3 py-2 text-xs leading-relaxed">
+                                  <code className={className} {...props}>{children}</code>
+                                </pre>
+                              )
+                            }
+                            return (
+                              <code className="rounded bg-slate-100 px-1.5 py-0.5 text-xs text-rose-600" {...props}>
+                                {children}
+                              </code>
+                            )
+                          },
+                          a: ({ href, children, ...props }: any) => (
+                            <a href={href} target="_blank" rel="noreferrer" className="text-blue-600 underline" {...props}>
                               {children}
-                            </code>
+                            </a>
                           ),
                         }}
                       >
-                        {msg.content}
+                        {normalizeMathDelimiters(msg.content)}
                       </ReactMarkdown>
                     ) : (
                       msg.content
