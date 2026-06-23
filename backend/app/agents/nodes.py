@@ -993,18 +993,30 @@ _RAG_SYSTEM_PROMPT = """\
 
 回答规则：
 1. 你只能依据下方「参考资料」中的内容回答问题，不得使用外部知识编造教材页码、公式或章节。
-2. 如果参考资料中有相关信息，请详细、有条理地回答，并在回答末尾注明引用的页码。
-3. 如果参考资料中没有足够信息，请明确回复："当前课程知识库中未找到足够依据来回答此问题。建议换一种问法或查阅教材相关章节。"
-4. 回答使用中文，适合学习场景，鼓励学生追问。
-5. 引用格式示例：（见教材第62页）"""
+2. 对话历史仅用于理解用户问题的上下文（如代词指代、话题延续），不得作为知识来源。
+3. 如果参考资料中有相关信息，请详细、有条理地回答，并在回答末尾注明引用的页码。
+4. 如果参考资料中没有足够信息，请明确回复："当前课程知识库中未找到足够依据来回答此问题。建议换一种问法或查阅教材相关章节。"
+5. 回答使用中文，适合学习场景，鼓励学生追问。
+6. 引用格式示例：（见教材第62页）"""
+
+_LONG_TERM_MEMORY_SYSTEM_PROMPT = """\
+以下是学习者长期学习记忆，仅用于调整讲解深度、示例和学习建议；若与当前教材资料冲突，以教材资料为准。"""
 
 
-async def prepare_rag_context(user_input: str) -> dict:
+async def prepare_rag_context(
+    user_input: str,
+    conversation_context: list[dict] | None = None,
+    long_term_memories: list[dict] | None = None,
+) -> dict:
     """
     检索课程知识库并构建 LLM messages，供流式或非流式调用复用。
 
     Args:
         user_input: 用户问题原文
+        conversation_context: 同会话近期对话历史（role/content），
+                              将注入 system prompt 之后、当前问题之前。
+        long_term_memories: 跨会话长期学习记忆（memory_type/content），
+                            注入为独立 system message，不影响教材引用。
 
     Returns:
         dict with keys:
@@ -1063,6 +1075,38 @@ async def prepare_rag_context(user_input: str) -> dict:
     if messages and messages[0]["role"] == "system":
         messages[0]["content"] = _RAG_SYSTEM_PROMPT
 
+    # 4.5 注入长期学习记忆（独立 system message，RAG context 之后）
+    if long_term_memories:
+        # 构建记忆摘要文本（每种类型一行，按 importance 排序已在调用侧完成）
+        memory_lines = []
+        for m in long_term_memories:
+            mtype = m.get("memory_type", "personal_fact")
+            content = m.get("content", "")
+            if content.strip():
+                memory_lines.append(f"- [{mtype}] {content}")
+        if memory_lines:
+            # 在 RAG 参考资料 system message 之后插入
+            # messages 当前: [system_rule, system_rag_context, user_current]
+            # 取出 user_current，插入长期记忆 system message，再放回
+            current_user_msg = messages.pop()
+            messages.append({
+                "role": "system",
+                "content": _LONG_TERM_MEMORY_SYSTEM_PROMPT + "\n\n" + "\n".join(memory_lines),
+            })
+            messages.append(current_user_msg)
+
+    # 4.6 注入同会话近期对话历史（system prompt 之后、当前问题之前）
+    if conversation_context:
+        # messages 结构: [system_rule, system_rag_context, user_current]
+        # 取出当前 user 消息，插入历史对话，再放回当前 user 消息
+        current_user_msg = messages.pop()
+        for hist_msg in conversation_context:
+            role = hist_msg.get("role", "user")
+            content = hist_msg.get("content", "")
+            if role in ("user", "assistant") and content.strip():
+                messages.append({"role": role, "content": content})
+        messages.append(current_user_msg)
+
     return {
         "success": True,
         "llm_messages": messages,
@@ -1077,8 +1121,14 @@ async def prepare_rag_context(user_input: str) -> dict:
 async def qa_agent_node(state: AgentState) -> dict:
     """答疑 Agent — RAG 检索 + LLM 回答 + citations"""
     user_input = state.get("user_input", "")
+    conversation_context = state.get("conversation_context", [])
+    long_term_memories = state.get("long_term_memories", [])
 
-    ctx = await prepare_rag_context(user_input)
+    ctx = await prepare_rag_context(
+        user_input,
+        conversation_context=conversation_context,
+        long_term_memories=long_term_memories,
+    )
 
     # 检索失败 → 直接返回提示
     if not ctx["success"]:

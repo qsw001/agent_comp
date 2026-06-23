@@ -10,6 +10,7 @@ from app.models.learning import (
     LearningPath,
     Evaluation,
 )
+from app.models.user_memory import UserMemory
 
 __all__ = [
     "User",
@@ -19,4 +20,5 @@ __all__ = [
     "LearningContent",
     "LearningPath",
     "Evaluation",
+    "UserMemory",
 ]

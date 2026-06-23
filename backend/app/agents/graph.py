@@ -78,7 +78,13 @@ def build_agent_graph() -> StateGraph:
 agent_graph = build_agent_graph()
 
 
-async def run_agent(user_input: str, user_id: str, thread_id: Optional[str] = None) -> dict:
+async def run_agent(
+    user_input: str,
+    user_id: str,
+    thread_id: Optional[str] = None,
+    conversation_context: Optional[list[dict]] = None,
+    long_term_memories: Optional[list[dict]] = None,
+) -> dict:
     """
     运行 Agent 并返回结果
 
@@ -86,6 +92,8 @@ async def run_agent(user_input: str, user_id: str, thread_id: Optional[str] = No
         user_input: 用户输入
         user_id: 用户 ID
         thread_id: 线程 ID（用于多轮对话上下文）
+        conversation_context: 同会话近期对话历史，用于短期记忆注入
+        long_term_memories: 跨会话长期学习记忆，用于个性化上下文
 
     Returns:
         Agent 输出
@@ -109,7 +117,7 @@ async def run_agent(user_input: str, user_id: str, thread_id: Optional[str] = No
         "current_content": None,
         "content_type": None,
         "generated_resources": [],
-        "conversation_context": [],
+        "conversation_context": conversation_context or [],
         "agent_output": None,
         "next_agent": None,
         "is_complete": False,
@@ -120,6 +128,7 @@ async def run_agent(user_input: str, user_id: str, thread_id: Optional[str] = No
         "citations": [],
         "retrieval_used": False,
         "confidence": None,
+        "long_term_memories": long_term_memories or [],
     }
 
     result = await agent_graph.ainvoke(initial_state, config)
