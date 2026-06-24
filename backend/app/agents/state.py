@@ -50,6 +50,9 @@ class AgentState(TypedDict):
     retrieval_used: bool
     confidence: Optional[float]
 
+    # ── 长期学习记忆 ──
+    long_term_memories: list[dict[str, Any]]
+
 
 AGENT_ROUTER = "router"
 AGENT_PROFILING = "profiling_agent"

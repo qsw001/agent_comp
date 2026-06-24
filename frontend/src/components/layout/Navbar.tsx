@@ -3,7 +3,7 @@ import { useState } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Menu, X, BookOpen, User, MessageCircle, Map, BarChart3, Home, LogOut } from 'lucide-react'
+import { Menu, X, BookOpen, User, MessageCircle, Map, BarChart3, Home, LogOut, Brain } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useAuthStore } from '@/stores'
 import { clearAuthToken } from '@/lib/auth'
@@ -15,6 +15,7 @@ const navItems = [
   { href: '/learning', label: '资源中心', icon: BookOpen },
   { href: '/path', label: '学习路径', icon: Map },
   { href: '/evaluation', label: '效果评估', icon: BarChart3 },
+  { href: '/memories', label: '学习记忆', icon: Brain },
 ]
 
 export function Navbar() {

@@ -3,11 +3,77 @@ RAG — 检索器
 """
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from app.config import settings
 from app.rag.embeddings import embed_batch
 from app.rag.vector_store import get_qdrant_client
+
+# ─── 查询扩展：口语化前缀 → 规范化查询 ─────────────────
+
+# 口语化引导词，去除后得到核心主题
+_QUERY_PREFIX_RE = re.compile(
+    r"^(讲讲|介绍|解释|说一下|说说|谈谈|什么是|什么叫|请说明|请介绍|请解释|简述|概述)\s*"
+)
+
+# 核心主题后缀模板
+_EXPANSION_SUFFIXES = ["是什么", "定义", "基本概念", ""]
+
+
+def _expand_queries(user_input: str) -> list[str]:
+    """
+    将口语化查询扩展为多个规范化检索查询。
+
+    "讲讲随机过程" → ["随机过程定义", "随机过程基本概念", "随机过程"]
+    "介绍泊松过程" → ["泊松过程定义", "泊松过程基本概念", "泊松过程"]
+    """
+    # 提取核心主题：去除口语前缀
+    core = _QUERY_PREFIX_RE.sub("", user_input).strip()
+    if not core:
+        return [user_input]
+
+    # 若已经是规范形式（什么/定义开头），直接返回原查询
+    if user_input.startswith(("什么是", "定义", "什么叫")):
+        return [user_input]
+
+    # 生成扩展查询，去重保持顺序
+    seen = set()
+    queries = []
+    for suffix in _EXPANSION_SUFFIXES:
+        q = (core + suffix).strip()
+        if q and q not in seen:
+            seen.add(q)
+            queries.append(q)
+    return queries
+
+
+async def _multi_query_retrieve(
+    queries: list[str],
+    top_k: int = 5,
+    score_threshold: float = 0.45,
+) -> list[dict[str, Any]]:
+    """
+    对多个查询分别检索，合并去重后按 score 降序返回。
+    已见 chunk_id 不再重复加入。
+    """
+    seen_ids: set[str] = set()
+    merged: list[dict[str, Any]] = []
+
+    for q in queries:
+        results = await _search_qdrant(
+            query=q,
+            top_k=top_k,
+            score_threshold=score_threshold,
+        )
+        for r in results:
+            cid = r.get("chunk_id", "")
+            if cid and cid not in seen_ids:
+                seen_ids.add(cid)
+                merged.append(r)
+
+    merged.sort(key=lambda x: x.get("score", 0), reverse=True)
+    return merged[:top_k]
 
 
 async def _search_qdrant(
@@ -141,6 +207,55 @@ async def retrieve_with_metadata(
         score_threshold=score_threshold,
         filters=filters,
     )
+
+    if not results:
+        return "", []
+
+    context_parts = []
+    for i, doc in enumerate(results, 1):
+        title = doc.get("title", "未命名")
+        content = doc.get("content", "")
+        page = doc.get("page_number", "?")
+        chapter = doc.get("chapter", "")
+        source = f"[来源: {chapter} 第{page}页]" if chapter else f"[来源: 第{page}页]"
+        context_parts.append(f"[{i}] {title} {source}\n{content}")
+
+    context = "\n\n---\n\n".join(context_parts)
+    return context, results
+
+
+async def retrieve_robust(
+    user_input: str,
+    top_k: int = 5,
+    score_threshold: float = 0.45,
+) -> tuple[str, list[dict]]:
+    """
+    鲁棒检索 — 先尝试原始查询，无结果时自动扩展查询词。
+
+    Args:
+        user_input: 用户原始输入
+        top_k: 返回文档数
+        score_threshold: 相似度阈值（比 retrieve_with_metadata 略低以增加召回）
+
+    Returns:
+        (context_string, results_list)
+    """
+    # 1. 先尝试原始查询
+    results = await _search_qdrant(
+        query=user_input,
+        top_k=top_k,
+        score_threshold=score_threshold,
+    )
+
+    # 2. 若无结果，尝试扩展查询
+    if not results:
+        expanded = _expand_queries(user_input)
+        if len(expanded) > 1:
+            results = await _multi_query_retrieve(
+                queries=expanded,
+                top_k=top_k,
+                score_threshold=score_threshold,
+            )
 
     if not results:
         return "", []

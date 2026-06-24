@@ -64,6 +64,11 @@ def router_node(state: AgentState) -> dict:
 
     # 关键词意图路由（先于画像检查）
     intent_map = {
+        "profiling_agent": [
+            "建立学习画像", "更新学习画像", "分析我的学习情况",
+            "了解我的基础", "评估我的学习能力", "我的学习偏好",
+            "我的薄弱点", "我适合怎样学习", "学习画像", "构建画像",
+        ],
         "qa_agent": [
             "什么是", "是什么", "什么叫", "定义", "性质", "区别",
             "概念", "原理", "为什么", "有哪些", "公式", "定理",
@@ -88,11 +93,7 @@ def router_node(state: AgentState) -> dict:
         if any(kw in user_input for kw in keywords):
             return {"next_agent": agent, "current_task": f"route to {agent}"}
 
-    # 无明确意图 + 无画像 → 引导构建画像
-    if not profile or len(profile_dims) < 6:
-        return {"next_agent": "profiling_agent", "current_task": "build_profile"}
-
-    # 默认：智能辅导
+    # 默认：智能辅导（所有未匹配意图均进入 QA）
     return {"next_agent": "qa_agent", "current_task": "qa"}
 
 
@@ -992,79 +993,167 @@ _RAG_SYSTEM_PROMPT = """\
 
 回答规则：
 1. 你只能依据下方「参考资料」中的内容回答问题，不得使用外部知识编造教材页码、公式或章节。
-2. 如果参考资料中有相关信息，请详细、有条理地回答，并在回答末尾注明引用的页码。
-3. 如果参考资料中没有足够信息，请明确回复："当前课程知识库中未找到足够依据来回答此问题。建议换一种问法或查阅教材相关章节。"
-4. 回答使用中文，适合学习场景，鼓励学生追问。
-5. 引用格式示例：（见教材第62页）"""
+2. 对话历史仅用于理解用户问题的上下文（如代词指代、话题延续），不得作为知识来源。
+3. 如果参考资料中有相关信息，请详细、有条理地回答，并在回答末尾注明引用的页码。
+4. 如果参考资料中没有足够信息，请明确回复："当前课程知识库中未找到足够依据来回答此问题。建议换一种问法或查阅教材相关章节。"
+5. 回答使用中文，适合学习场景，鼓励学生追问。
+6. 引用格式示例：（见教材第62页）"""
+
+_LONG_TERM_MEMORY_SYSTEM_PROMPT = """\
+以下是学习者长期学习记忆，仅用于调整讲解深度、示例和学习建议；若与当前教材资料冲突，以教材资料为准。"""
 
 
-async def qa_agent_node(state: AgentState) -> dict:
-    """答疑 Agent — RAG 检索 + LLM 回答 + citations"""
-    user_input = state.get("user_input", "")
+async def prepare_rag_context(
+    user_input: str,
+    conversation_context: list[dict] | None = None,
+    long_term_memories: list[dict] | None = None,
+) -> dict:
+    """
+    检索课程知识库并构建 LLM messages，供流式或非流式调用复用。
 
-    # ── 1. 检索课程知识库 ──
-    from app.rag.retriever import retrieve_with_metadata, build_rag_prompt
+    Args:
+        user_input: 用户问题原文
+        conversation_context: 同会话近期对话历史（role/content），
+                              将注入 system prompt 之后、当前问题之前。
+        long_term_memories: 跨会话长期学习记忆（memory_type/content），
+                            注入为独立 system message，不影响教材引用。
 
+    Returns:
+        dict with keys:
+          - success: bool                 是否成功检索到有效资料
+          - llm_messages: list[dict]      DeepSeek 消息列表（已注入 RAG prompt）
+          - citations: list[dict]         引用来源列表
+          - retrieval_used: bool          是否实际使用了 RAG
+          - confidence: float | None      置信度
+          - no_results_message: str      检索失败时的用户提示（success=False 时可用）
+          - fallback_results: list[dict]  LLM 失败降级时使用的原始检索结果
+    """
+    from app.rag.retriever import retrieve_robust, build_rag_prompt
+
+    # 1. 检索
     try:
-        context, results = await retrieve_with_metadata(
-            query=user_input,
+        context, results = await retrieve_robust(
+            user_input=user_input,
             top_k=5,
-            score_threshold=0.5,
         )
     except Exception as exc:
-        # Qdrant 连接失败等
         return {
-            "agent_output": f"抱歉，检索课程知识库时出现问题：{exc}\n请稍后重试。",
+            "success": False,
+            "llm_messages": [],
             "citations": [],
             "retrieval_used": False,
             "confidence": None,
-            "next_agent": None,
-            "is_complete": True,
+            "no_results_message": f"抱歉，检索课程知识库时出现问题：{exc}\n请稍后重试。",
+            "fallback_results": [],
         }
 
-    # ── 2. 无有效检索结果 → 直接返回提示 ──
+    # 2. 无结果
     if not results or not context.strip():
         return {
-            "agent_output": (
+            "success": False,
+            "llm_messages": [],
+            "citations": [],
+            "retrieval_used": False,
+            "confidence": None,
+            "no_results_message": (
                 "当前课程知识库中未找到足够依据来回答此问题。\n\n"
                 "建议：\n"
                 "1. 尝试换一种更具体的问法\n"
                 "2. 查阅《随机过程及应用》教材相关章节\n"
                 "3. 询问其他随机过程相关的问题"
             ),
-            "citations": [],
-            "retrieval_used": False,
-            "confidence": None,
+            "fallback_results": [],
+        }
+
+    # 3. citations + confidence
+    citations = _build_citations(results)
+    top_score = max((r.get("score", 0) for r in results), default=0)
+    confidence = min(max(top_score, 0.0), 1.0)
+
+    # 4. 构建 LLM messages
+    messages = build_rag_prompt(user_input, context)
+    if messages and messages[0]["role"] == "system":
+        messages[0]["content"] = _RAG_SYSTEM_PROMPT
+
+    # 4.5 注入长期学习记忆（独立 system message，RAG context 之后）
+    if long_term_memories:
+        # 构建记忆摘要文本（每种类型一行，按 importance 排序已在调用侧完成）
+        memory_lines = []
+        for m in long_term_memories:
+            mtype = m.get("memory_type", "personal_fact")
+            content = m.get("content", "")
+            if content.strip():
+                memory_lines.append(f"- [{mtype}] {content}")
+        if memory_lines:
+            # 在 RAG 参考资料 system message 之后插入
+            # messages 当前: [system_rule, system_rag_context, user_current]
+            # 取出 user_current，插入长期记忆 system message，再放回
+            current_user_msg = messages.pop()
+            messages.append({
+                "role": "system",
+                "content": _LONG_TERM_MEMORY_SYSTEM_PROMPT + "\n\n" + "\n".join(memory_lines),
+            })
+            messages.append(current_user_msg)
+
+    # 4.6 注入同会话近期对话历史（system prompt 之后、当前问题之前）
+    if conversation_context:
+        # messages 结构: [system_rule, system_rag_context, user_current]
+        # 取出当前 user 消息，插入历史对话，再放回当前 user 消息
+        current_user_msg = messages.pop()
+        for hist_msg in conversation_context:
+            role = hist_msg.get("role", "user")
+            content = hist_msg.get("content", "")
+            if role in ("user", "assistant") and content.strip():
+                messages.append({"role": role, "content": content})
+        messages.append(current_user_msg)
+
+    return {
+        "success": True,
+        "llm_messages": messages,
+        "citations": citations,
+        "retrieval_used": True,
+        "confidence": confidence,
+        "no_results_message": None,
+        "fallback_results": results,
+    }
+
+
+async def qa_agent_node(state: AgentState) -> dict:
+    """答疑 Agent — RAG 检索 + LLM 回答 + citations"""
+    user_input = state.get("user_input", "")
+    conversation_context = state.get("conversation_context", [])
+    long_term_memories = state.get("long_term_memories", [])
+
+    ctx = await prepare_rag_context(
+        user_input,
+        conversation_context=conversation_context,
+        long_term_memories=long_term_memories,
+    )
+
+    # 检索失败 → 直接返回提示
+    if not ctx["success"]:
+        return {
+            "agent_output": ctx["no_results_message"],
+            "citations": ctx["citations"],
+            "retrieval_used": ctx["retrieval_used"],
+            "confidence": ctx["confidence"],
             "next_agent": None,
             "is_complete": True,
         }
 
-    # ── 3. 构建 citations ──
-    citations = _build_citations(results)
-
-    # ── 4. 计算 confidence（基于最高检索 score） ──
-    top_score = max((r.get("score", 0) for r in results), default=0)
-    confidence = min(max(top_score, 0.0), 1.0)
-
-    # ── 5. 构建 RAG prompt 并调用 LLM ──
-    messages = build_rag_prompt(user_input, context)
-    # 替换 system prompt 为定制版本
-    if messages and messages[0]["role"] == "system":
-        messages[0]["content"] = _RAG_SYSTEM_PROMPT
-
+    # 检索成功 → 调用 LLM
     try:
         from app.llm import LLMFactory
-        response = await LLMFactory.chat(messages)
+        response = await LLMFactory.chat(ctx["llm_messages"])
         answer = response.content.strip() if response and response.content else ""
     except Exception:
-        # LLM 调用失败 → 降级为检索片段摘要
-        answer = _build_fallback_from_results(results)
+        answer = _build_fallback_from_results(ctx["fallback_results"])
 
     return {
         "agent_output": answer,
-        "citations": citations,
-        "retrieval_used": True,
-        "confidence": confidence,
+        "citations": ctx["citations"],
+        "retrieval_used": ctx["retrieval_used"],
+        "confidence": ctx["confidence"],
         "next_agent": None,
         "is_complete": True,
     }
