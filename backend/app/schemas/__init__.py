@@ -130,6 +130,10 @@ class ChatSessionCreate(BaseModel):
     title: str = "新会话"
 
 
+class ChatSessionRename(BaseModel):
+    title: str = Field(min_length=1, max_length=60)
+
+
 class ChatSessionResponse(BaseModel):
     id: str
     title: str
@@ -200,3 +204,15 @@ class LearningProgressResponse(BaseModel):
     strengths: list[str]
     weaknesses: list[str]
     recommendations: list[str]
+
+
+# ─── 长期学习记忆 ──────────────────────────────────────
+
+class MemoryResponse(BaseModel):
+    id: str
+    memory_type: str
+    content: str
+    importance: float
+    source_message_id: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime

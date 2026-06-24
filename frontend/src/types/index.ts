@@ -141,6 +141,17 @@ export interface ResourceGenerateRequest {
   profile_dims?: ProfileDimension[]
 }
 
+// ── 长期学习记忆 ──
+export interface Memory {
+  id: string
+  memory_type: string
+  content: string
+  importance: number
+  source_message_id: string | null
+  created_at: string
+  updated_at: string
+}
+
 // ── 资源类型元数据 ──
 export const RESOURCE_TYPE_META: Record<ResourceType, { name: string; icon: string; color: string }> = {
   document: { name: '课程讲解', icon: '📖', color: '#3B82F6' },

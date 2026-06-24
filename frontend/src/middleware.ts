@@ -40,5 +40,7 @@ export const config = {
     "/profile/:path*",
     "/learning/:path*",
     "/path/:path*",
+    "/evaluation/:path*",
+    "/memories/:path*",
   ],
 };
